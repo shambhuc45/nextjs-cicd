@@ -35,7 +35,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            cd ~/nextjs-cicd || mkdir ~/nextjs-cicd && cd ~/nextjs-cicd
+            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
 
             docker compose down || true
 
