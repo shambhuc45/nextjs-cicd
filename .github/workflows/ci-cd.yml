@@ -34,14 +34,14 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+            echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            sudo mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
 
-            docker compose down || true
+            sudo docker compose down || true
 
             # Pull latest image
             IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
-            docker pull $IMAGE_NAME:latest
+            sudo docker pull $IMAGE_NAME:latest
 
             cat <<EOF > docker-compose.yml
             services:
@@ -52,4 +52,4 @@ jobs:
                 restart: always
             EOF
 
-            docker compose up -d
+            sudo docker compose up -d
