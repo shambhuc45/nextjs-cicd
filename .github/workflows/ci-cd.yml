@@ -52,26 +52,31 @@ jobs:
             echo "COMPOSE_FILE=docker-compose.prod.yml" >> $GITHUB_ENV
             echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
           fi
-
-          - name: SSH and Deploy
-          uses: appleboy/ssh-action@v1.0.3
-          with:
-            host: ${{ secrets.SSH_HOST }}
-            username: ${{ secrets.SSH_USER }}
-            key: ${{ secrets.SSH_PRIVATE_KEY }}
-            script: |
-              echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
-              
-              mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
-              
-              wget -q https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }} -O docker-compose.yml
-              
-              sudo docker compose down || true
-              
-              IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
-              sudo docker pull $IMAGE_NAME
-              sudo docker compose up -d
-              
-              sleep 10
-              
-              echo "Successfully deployed to ${{ env.DOMAIN }}"
+      
+      - name: SSH and Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
+            
+            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+            
+            # Download the correct compose file
+            wget -q https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }} -O docker-compose.yml
+            
+            # Cleanup and deploy
+            sudo docker compose down || true
+            sudo docker image prune -af
+            
+            IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
+            sudo docker pull $IMAGE_NAME
+            sudo docker compose up -d
+            
+            # Verify deployment
+            sleep 10
+            curl -I http://localhost:${{ env.ENV == 'test' && '3001' || '3000' }} || true
+            
+            echo "Successfully deployed to ${{ env.DOMAIN }}"
