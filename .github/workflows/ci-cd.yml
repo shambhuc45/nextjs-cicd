@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Branch based)
+name: CI/CD Pipeline (Branch-based)
 
 on:
   push:
@@ -20,7 +20,7 @@ jobs:
           node-version: "18"
 
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build and Push Docker Image
         run: |
@@ -29,8 +29,8 @@ jobs:
 
           echo "Building Docker image: $IMAGE_NAME:$TAG"
 
-          docker build -t $IMAGE_NAME:$TAG -f Dockerfile .
-          docker push $IMAGE_NAME:$TAG
+          sudo docker build -t $IMAGE_NAME:$TAG -f Dockerfile .
+          sudo docker push $IMAGE_NAME:$TAG
 
   deploy:
     runs-on: ubuntu-latest
@@ -54,6 +54,7 @@ jobs:
             echo "PORT=3000" >> $GITHUB_ENV
           fi
 
+          # Check if .env exists before reading
           if [ -f ".env" ]; then
             DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
             echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
@@ -75,8 +76,8 @@ jobs:
 
             mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
 
-            echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker pull $IMAGE_NAME
+            echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            sudo docker pull $IMAGE_NAME
 
             if [ ! -f docker-compose.yml ]; then
               cat > docker-compose.yml <<EOL
@@ -92,11 +93,12 @@ jobs:
             EOL
             fi
 
+            # Set environment variables and deploy the container
             echo "PORT=${{ env.PORT }}" > .env
             echo "NODE_ENV=${{ env.ENV }}" >> .env
             echo "IMAGE_NAME=$IMAGE_NAME" >> .env
 
-            docker compose down || true
-            docker compose up -d
+            sudo docker compose down || true
+            sudo docker compose up -d
 
             echo "Successfully deployed to ${{ env.DOMAIN }}"
