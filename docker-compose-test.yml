@@ -1,0 +1,9 @@
+version: "3.8"
+services:
+  app:
+    image: ghcr.io/shambhuc45/nextjs-cicd:test
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=test
+    restart: always

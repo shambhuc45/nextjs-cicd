@@ -1,4 +1,4 @@
-name: CI/CD Pipeline (Branch-based)
+name: Branch-Based Deployment
 
 on:
   push:
@@ -17,20 +17,19 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
-          node-version: "18"
+          node-version: "20"
 
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build and Push Docker Image
         run: |
+          # Tag images with branch name
           IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
           TAG=${{ github.ref_name }}
 
-          echo "Building Docker image: $IMAGE_NAME:$TAG"
-
-          sudo docker build -t $IMAGE_NAME:$TAG -f Dockerfile .
-          sudo docker push $IMAGE_NAME:$TAG
+          docker build -t $IMAGE_NAME:$TAG .
+          docker push $IMAGE_NAME:$TAG
 
   deploy:
     runs-on: ubuntu-latest
@@ -38,67 +37,41 @@ jobs:
     if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code (with .env files)
+      - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Determine Environment and Domain
+      - name: Determine Environment
         id: set-env
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
             echo "ENV=test" >> $GITHUB_ENV
-            echo "PORT=3001" >> $GITHUB_ENV
+            echo "COMPOSE_FILE=docker-compose.test.yml" >> $GITHUB_ENV
+            echo "DOMAIN=test.hatesglobal.com" >> $GITHUB_ENV
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "ENV=prod" >> $GITHUB_ENV
-            echo "PORT=3000" >> $GITHUB_ENV
+            echo "COMPOSE_FILE=docker-compose.prod.yml" >> $GITHUB_ENV
+            echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
           fi
 
-          # Check if .env exists before reading
-          if [ -f ".env" ]; then
-            DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
-            echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
-          else
-            echo "DOMAIN=example.com" >> $GITHUB_ENV
-            echo "Warning: .env file not found, using default domain" >&2
-          fi
-
-      - name: SSH and Deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
-
-            IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
-
-            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
-
-            echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            sudo docker pull $IMAGE_NAME
-
-            if [ ! -f docker-compose.yml ]; then
-              cat > docker-compose.yml <<EOL
-            version: '3'
-            services:
-              app:
-                image: \$IMAGE_NAME
-                restart: always
-                ports:
-                  - "\$PORT:3000"
-                environment:
-                  - NODE_ENV=\$NODE_ENV
-            EOL
-            fi
-
-            # Set environment variables and deploy the container
-            echo "PORT=${{ env.PORT }}" > .env
-            echo "NODE_ENV=${{ env.ENV }}" >> .env
-            echo "IMAGE_NAME=$IMAGE_NAME" >> .env
-
-            sudo docker compose down || true
-            sudo docker compose up -d
-
-            echo "Successfully deployed to ${{ env.DOMAIN }}"
+          - name: SSH and Deploy
+          uses: appleboy/ssh-action@v1.0.3
+          with:
+            host: ${{ secrets.SSH_HOST }}
+            username: ${{ secrets.SSH_USER }}
+            key: ${{ secrets.SSH_PRIVATE_KEY }}
+            script: |
+              echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
+              
+              mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+              
+              wget -q https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }} -O docker-compose.yml
+              
+              sudo docker compose down || true
+              
+              IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
+              sudo docker pull $IMAGE_NAME
+              sudo docker compose up -d
+              
+              sleep 10
+              
+              echo "Successfully deployed to ${{ env.DOMAIN }}"
