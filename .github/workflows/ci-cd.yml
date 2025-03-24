@@ -52,7 +52,7 @@ jobs:
             echo "COMPOSE_FILE=docker-compose.prod.yml" >> $GITHUB_ENV
             echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
           fi
-      
+
       - name: SSH and Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -61,22 +61,32 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
-            
+
             mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
-            
-            # Download the correct compose file
-            wget -q https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }} -O docker-compose.yml
-            
-            # Cleanup and deploy
+
+            COMPOSE_URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }}"
+            echo "Downloading compose file from: $COMPOSE_URL"
+            wget -q "$COMPOSE_URL" -O docker-compose.yml || {
+              echo "Failed to download compose file"
+              exit 1
+            }
+
+            if [ ! -s docker-compose.yml ]; then
+              echo "Error: Compose file is empty or missing"
+              exit 1
+            fi
+
             sudo docker compose down || true
-            sudo docker image prune -af
-            
-            IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
-            sudo docker pull $IMAGE_NAME
+
+            IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}"
+            echo "Pulling image: $IMAGE_NAME"
+            sudo docker pull "$IMAGE_NAME"
+
+            echo "Starting containers..."
             sudo docker compose up -d
-            
-            # Verify deployment
+
+            echo "Verifying deployment..."
             sleep 10
             curl -I http://localhost:${{ env.ENV == 'test' && '3001' || '3000' }} || true
-            
+
             echo "Successfully deployed to ${{ env.DOMAIN }}"
