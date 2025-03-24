@@ -1,8 +1,9 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline (Branch based)
 
 on:
   push:
     branches:
+      - dev
       - main
 
 jobs:
@@ -13,43 +14,75 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build and Push Docker Image
         run: |
+          # Define image and tag based on the branch name
           IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
-          docker build -t $IMAGE_NAME:latest .
-          docker push $IMAGE_NAME:latest
+          TAG=${{ github.ref_name }}
+
+          echo "Building Docker image: $IMAGE_NAME:$TAG"
+
+          docker build -t $IMAGE_NAME:$TAG .
+          docker push $IMAGE_NAME:$TAG
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
+    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
 
     steps:
-      - name: SSH into Server and Deploy
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Determine Environment and Domain
+        id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "ENV=test" >> $GITHUB_ENV
+            echo "PORT=3001" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "ENV=prod" >> $GITHUB_ENV
+            echo "PORT=3000" >> $GITHUB_ENV
+          fi
+
+          # Load DOMAIN from .env file
+          DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
+          echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
+
+      - name: SSH and Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "${{ secrets.GH_NEW_PAT }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            sudo mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+            echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
 
+            # Set image dynamically
+            IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
+
+            # Create project directory
+            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+
+            # Pull new image
+            echo "Pulling Docker image: $IMAGE_NAME"
+            sudo docker pull $IMAGE_NAME
+
+            # Run Docker Compose with environment settings
+            echo "PORT=${{ env.PORT }}" > .env
+            echo "NODE_ENV=${{ env.ENV }}" >> .env
+            echo "IMAGE_NAME=$IMAGE_NAME" >> .env
+
+            # Stop existing container and start a new one with updated image
             sudo docker compose down || true
-
-            # Pull latest image
-            IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
-            sudo docker pull $IMAGE_NAME:latest
-
-            cat <<EOF > docker-compose.yml
-            services:
-              app:
-                image: $IMAGE_NAME:latest
-                ports:
-                  - "3001:3000"
-                restart: always
-            EOF
-
             sudo docker compose up -d
+
+            echo "Successfully deployed to ${{ env.DOMAIN }}"

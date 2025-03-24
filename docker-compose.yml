@@ -1,11 +1,9 @@
+version: "3.8"
 services:
   app:
-    build:
-      context: .
-    image: nextjs-cicd
+    image: $IMAGE_NAME
     ports:
-      - "3001:3000"
-    volumes:
-      - .:/app
-      - /app/node_modules
-    command: npm run dev
+      - "${PORT}:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV} # Dynamic environment variable (test, sandbox, production)
+    restart: always
