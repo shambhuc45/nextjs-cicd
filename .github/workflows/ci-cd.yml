@@ -30,7 +30,7 @@ jobs:
 
           echo "Building Docker image: $IMAGE_NAME:$TAG"
 
-          docker build -t $IMAGE_NAME:$TAG .
+          docker build -t $IMAGE_NAME:$TAG -f Dockerfile .
           docker push $IMAGE_NAME:$TAG
 
   deploy:
@@ -39,8 +39,10 @@ jobs:
     if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
+      - name: Checkout code (with .env files)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Determine Environment and Domain
         id: set-env
@@ -53,9 +55,14 @@ jobs:
             echo "PORT=3000" >> $GITHUB_ENV
           fi
 
-          # Load DOMAIN from .env file
-          DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
-          echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
+          # Check if .env exists before reading
+          if [ -f ".env" ]; then
+            DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
+            echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
+          else
+            echo "DOMAIN=example.com" >> $GITHUB_ENV
+            echo "Warning: .env file not found, using default domain" >&2
+          fi
 
       - name: SSH and Deploy
         uses: appleboy/ssh-action@v1.0.3
@@ -74,15 +81,28 @@ jobs:
 
             # Pull new image
             echo "Pulling Docker image: $IMAGE_NAME"
-            sudo docker pull $IMAGE_NAME
+            echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker pull $IMAGE_NAME
 
-            # Run Docker Compose with environment settings
+            if [ ! -f docker-compose.yml ]; then
+              cat > docker-compose.yml <<EOL
+            version: '3'
+            services:
+              app:
+                image: \$IMAGE_NAME
+                restart: always
+                ports:
+                  - "\$PORT:3000"
+                environment:
+                  - NODE_ENV=\$NODE_ENV
+            EOL
+            fi
+
             echo "PORT=${{ env.PORT }}" > .env
             echo "NODE_ENV=${{ env.ENV }}" >> .env
             echo "IMAGE_NAME=$IMAGE_NAME" >> .env
 
-            # Stop existing container and start a new one with updated image
-            sudo docker compose down || true
-            sudo docker compose up -d
+            docker compose down || true
+            docker compose up -d
 
             echo "Successfully deployed to ${{ env.DOMAIN }}"
