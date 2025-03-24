@@ -1,7 +1,6 @@
-version: "3.8"
 services:
   app:
-    image: ghcr.io/shambhuc45/nextjs-cicd:test
+    image: ghcr.io/shambhuc45/nextjs-cicd:dev
     ports:
       - "3001:3000"
     environment:
