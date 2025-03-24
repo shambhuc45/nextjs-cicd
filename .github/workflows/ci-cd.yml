@@ -24,7 +24,6 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          # Define image and tag based on the branch name
           IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
           TAG=${{ github.ref_name }}
 
@@ -55,7 +54,6 @@ jobs:
             echo "PORT=3000" >> $GITHUB_ENV
           fi
 
-          # Check if .env exists before reading
           if [ -f ".env" ]; then
             DOMAIN=$(grep DOMAIN .env | cut -d '=' -f2)
             echo "DOMAIN=${DOMAIN}" >> $GITHUB_ENV
@@ -73,14 +71,10 @@ jobs:
           script: |
             echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
 
-            # Set image dynamically
             IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}
 
-            # Create project directory
             mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
 
-            # Pull new image
-            echo "Pulling Docker image: $IMAGE_NAME"
             echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             docker pull $IMAGE_NAME
 
