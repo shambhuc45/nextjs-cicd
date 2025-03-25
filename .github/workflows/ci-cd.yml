@@ -5,6 +5,7 @@ on:
     branches:
       - dev
       - main
+      - sandbox
 
 jobs:
   build:
@@ -24,6 +25,7 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
+          # Tag images with branch name
           IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
           TAG=${{ github.ref_name }}
 
@@ -33,7 +35,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/sandbox'
 
     steps:
       - name: Checkout code
@@ -50,6 +52,13 @@ jobs:
             echo "ENV=prod" >> $GITHUB_ENV
             echo "COMPOSE_FILE=docker-compose-prod.yml" >> $GITHUB_ENV
             echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
+            echo "ENV=sandbox" >> $GITHUB_ENV
+            echo "COMPOSE_FILE=docker-compose-sandbox.yml" >> $GITHUB_ENV
+            echo "DOMAIN=sandbox.hatesglobal.com" >> $GITHUB_ENV
+          else
+            echo "Error: Unknown branch"
+            exit 1
           fi
 
       - name: SSH and Deploy
@@ -79,11 +88,9 @@ jobs:
             sudo docker image prune -af
 
             IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}"
-            echo "Pulling image: $IMAGE_NAME"
             sudo docker pull "$IMAGE_NAME"
 
-            echo "Starting containers..."
-            sudo docker compose -p sandbox up -d
+            sudo docker compose up -d
 
             echo "Verifying deployment..."
             sleep 10
