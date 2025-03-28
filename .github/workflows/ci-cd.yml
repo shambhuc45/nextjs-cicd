@@ -92,7 +92,7 @@ jobs:
 
       # Authenticate with GitHub Container Registry
       - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GH_AT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.GH_NEW_PAT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       # Build and push Docker image with appropriate tags
       - name: Build and Push Docker Image
