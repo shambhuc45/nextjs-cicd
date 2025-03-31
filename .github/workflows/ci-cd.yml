@@ -31,12 +31,12 @@ jobs:
       # Checkout code with full history for version analysis
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed for version detection
+          fetch-depth: 0
 
       - name: Check version condition
         id: check
         run: |
-          # Only generate versions for main branch or version tags
+          # Only generate version for 'main' branch or version tags
           if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == refs/tags/* ]]; then
             echo "should_version=true" >> $GITHUB_OUTPUT
           else
@@ -69,7 +69,6 @@ jobs:
         with:
           node-version: "20"
 
-      # Install dependencies and build the application
       - name: Install dependencies and build
         run: |
           npm install
@@ -81,27 +80,22 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          # Sanitize branch/PR name for tags
-          if [[ "${{ github.ref }}" == refs/pull/* ]]; then
-            TAG_SUFFIX="pr-${GITHUB_REF#refs/pull/}"
-            TAG_SUFFIX="${TAG_SUFFIX%/merge}-$(git rev-parse --short HEAD)"
+          # Determine tag name based on branch
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            IMAGE_TAG="dev-$(git rev-parse --short HEAD)"
+          elif [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
+            IMAGE_TAG="${{ needs.version-check.outputs.version }}"
           else
-            TAG_SUFFIX="${GITHUB_REF#refs/heads/}-$(git rev-parse --short HEAD)"
+            IMAGE_TAG="${{ github.ref_name }}-$(git rev-parse --short HEAD)"
           fi
 
-          # Replace invalid characters
-          TAG_SUFFIX=$(echo "$TAG_SUFFIX" | tr '/' '-' | tr '_' '-')
-
-          if [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
-            FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.version }}
-          else
-            FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG_SUFFIX
-          fi
+          FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG
+          echo "FULL_TAG=$FULL_TAG" >> $GITHUB_ENV
 
           docker build -t $FULL_TAG .
           docker push $FULL_TAG
 
-          # Additional tags for main branch
+          # Tag latest for main branch
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             LATEST_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             docker tag $FULL_TAG $LATEST_TAG
@@ -132,7 +126,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Set environment-specific variables
       - name: Determine Environment
         id: set-env
         run: |
@@ -150,10 +143,8 @@ jobs:
             echo "DOMAIN=sandbox.hatesglobal.com" >> $GITHUB_ENV
           fi
 
-          # Get the exact image tag from build job
-          echo "IMAGE_NAME=${{ needs.build.outputs.FULL_TAG || env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF#refs/heads/}" >> $GITHUB_ENV
+          echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
 
-      # SSH into server and deploy using Docker Compose
       - name: SSH and Deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
