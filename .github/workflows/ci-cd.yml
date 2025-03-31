@@ -13,7 +13,7 @@ on:
     branches:
       - dev
 
-# Global environment variables
+# Global environment variables for the workflow
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: shambhuc45/cicd-nextapp
