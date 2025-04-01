@@ -163,8 +163,8 @@ jobs:
             echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_ENV
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "ENV=production" >> $GITHUB_ENV
-            echo "PORT=3000" >> $GITHUB_ENV
-            echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
+            echo "PORT=3003" >> $GITHUB_ENV
+            echo "DOMAIN=main.hatesglobal.com" >> $GITHUB_ENV
             echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_ENV
           elif [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
             echo "ENV=sandbox" >> $GITHUB_ENV
