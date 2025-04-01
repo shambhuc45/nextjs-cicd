@@ -114,10 +114,6 @@ jobs:
             docker tag ${{ env.FULL_TAG }} $DEV_LATEST
             docker push $DEV_LATEST
             
-            # 2. (Optional) Push date-based tag
-            DATE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-$(date +%Y-%m-%d)"
-            docker tag ${{ env.FULL_TAG }} $DATE_TAG
-            docker push $DATE_TAG
           fi
 
           # MAIN BRANCH STRATEGY
