@@ -56,22 +56,20 @@ jobs:
         id: version
         if: steps.check.outputs.should_version == 'true'
         run: |
-          # Get commits since last tag
           echo "Checking commits since ${{ steps.last-tag.outputs.last_tag }}"
           COMMITS_SINCE_LAST_TAG=$(git log ${{ steps.last-tag.outputs.last_tag }}..HEAD --pretty=format:"%s")
           echo "Commits since last tag:"
           echo "$COMMITS_SINCE_LAST_TAG"
 
-          # Count commit types since last tag
           MAJOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "BREAKING CHANGE" || true)
           MINOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^feat" || true)
           PATCH=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^fix" || true)
 
-          # Extract current version components (remove 'v' prefix)
-          CURRENT_VERSION="${${{ steps.last-tag.outputs.last_tag }}#v}"
+          # Extract current version correctly
+          CURRENT_VERSION="${{ steps.last-tag.outputs.last_tag }}"
+          CURRENT_VERSION="${CURRENT_VERSION#v}"  # Corrected version extraction
           IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$CURRENT_VERSION"
 
-          # Calculate new version
           NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
           if [ $MAJOR -gt 0 ]; then
             NEW_MINOR=0
