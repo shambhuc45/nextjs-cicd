@@ -33,6 +33,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Get last tag
+        id: last-tag
+        run: |
+          # Get the most recent tag or default to v0.0.0
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "last_tag=$LAST_TAG" >> $GITHUB_OUTPUT
+          echo "Found last tag: $LAST_TAG"
+
       - name: Check version condition
         id: check
         run: |
@@ -48,40 +56,39 @@ jobs:
         id: version
         if: steps.check.outputs.should_version == 'true'
         run: |
-          # Get the current version from package.json or use default
-          DEFAULT_VERSION="1.0.0"
-          VERSION=$(jq -r '.version' package.json || echo "$DEFAULT_VERSION")
-          
-          # If we're on main branch, increment version based on commit messages
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # Count commit types since last tag
-            MAJOR=$(git log --grep="BREAKING CHANGE" --oneline | wc -l)
-            MINOR=$(git log --grep="^feat" --oneline | wc -l)
-            PATCH=$(git log --grep="^fix" --oneline | wc -l)
-            
-            # Split current version
-            IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$VERSION"
-            
-            # Calculate new version
-            NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
-            if [ $MAJOR -gt 0 ]; then
-              NEW_MINOR=0
+          # Get commits since last tag
+          echo "Checking commits since ${{ steps.last-tag.outputs.last_tag }}"
+          COMMITS_SINCE_LAST_TAG=$(git log ${{ steps.last-tag.outputs.last_tag }}..HEAD --pretty=format:"%s")
+          echo "Commits since last tag:"
+          echo "$COMMITS_SINCE_LAST_TAG"
+
+          # Count commit types since last tag
+          MAJOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "BREAKING CHANGE" || true)
+          MINOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^feat" || true)
+          PATCH=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^fix" || true)
+
+          # Extract current version components (remove 'v' prefix)
+          CURRENT_VERSION="${${{ steps.last-tag.outputs.last_tag }}#v}"
+          IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$CURRENT_VERSION"
+
+          # Calculate new version
+          NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
+          if [ $MAJOR -gt 0 ]; then
+            NEW_MINOR=0
+            NEW_PATCH=0
+          else
+            NEW_MINOR=$((CURRENT_MINOR + MINOR))
+            if [ $MINOR -gt 0 ]; then
               NEW_PATCH=0
             else
-              NEW_MINOR=$((CURRENT_MINOR + MINOR))
-              if [ $MINOR -gt 0 ]; then
-                NEW_PATCH=0
-              else
-                NEW_PATCH=$((CURRENT_PATCH + PATCH))
-              fi
+              NEW_PATCH=$((CURRENT_PATCH + PATCH))
             fi
-            
-            VERSION="${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
           fi
-          
-          # Ensure version starts with v
-          VERSION="v${VERSION#v}"
+
+          VERSION="v${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated new version: $VERSION"
+          echo "Version components - Major: $MAJOR, Minor: $MINOR, Patch: $PATCH"
 
   # ==============================================
   # Build Job - Builds and tags Docker image
@@ -167,11 +174,18 @@ jobs:
 
       - name: Create Git Tag
         if: needs.version-check.outputs.should_version == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_NEW_PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Delete local and remote tag if exists
+          git tag -d ${{ needs.version-check.outputs.version }} || true
+          git push --delete origin ${{ needs.version-check.outputs.version }} || true
+          # Create and push new tag
           git tag ${{ needs.version-check.outputs.version }}
           git push origin ${{ needs.version-check.outputs.version }}
+          echo "Successfully created tag ${{ needs.version-check.outputs.version }}"
 
       - name: Logout from Container Registry
         if: always() && github.event_name != 'pull_request'
