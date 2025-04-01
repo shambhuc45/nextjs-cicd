@@ -62,8 +62,8 @@ jobs:
           echo "$COMMITS_SINCE_LAST_TAG"
 
           MAJOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "BREAKING CHANGE" || true)
-          MINOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^feat" || true)
-          PATCH=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -c "^fix" || true)
+          MINOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep "^feat" | wc -l | awk '{print ($1 > 0) ? 1 : 0}')
+          PATCH=$(echo "$COMMITS_SINCE_LAST_TAG" | grep "^fix" | wc -l | awk '{print ($1 > 0) ? 1 : 0}')
 
           # Extract current version correctly
           CURRENT_VERSION="${{ steps.last-tag.outputs.last_tag }}"
