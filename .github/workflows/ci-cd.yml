@@ -1,56 +1,176 @@
 name: Branch-Based Deployment
 
+# Trigger conditions for the workflow
 on:
   push:
     branches:
       - dev
       - main
+      - sandbox
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  pull_request:
+    branches:
+      - dev
+
+# Global environment variables for the workflow
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: shambhuc45/cicd-nextapp
 
 jobs:
-  build:
+  # ==============================================
+  # Version Check Job - Determines version number
+  # ==============================================
+  version-check:
     runs-on: ubuntu-latest
-
+    outputs:
+      should_version: ${{ steps.check.outputs.should_version }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      # Checkout code with full history for version analysis
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Check version condition
+        id: check
+        run: |
+          # Only generate versions for main branch or version tags
+          if [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "should_version=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_version=false" >> $GITHUB_OUTPUT
+          fi
+
+      # Generate semantic version based on commit messages
+      - name: Generate Semantic Version
+        id: version
+        if: steps.check.outputs.should_version == 'true'
+        uses: paulhatch/semantic-version@v3
+        with:
+          major_pattern: "BREAKING CHANGE"
+          minor_pattern: "feat"
+          patch_pattern: "fix"
+          format: "{major}.{minor}.{patch}"
+
+  # ==============================================
+  # Build Job - Builds and tags Docker image
+  # ==============================================
+  build:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Set up Node.js environment
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: "20"
 
-      - name: Log in to GitHub Container Registry
-        run: echo "${{ secrets.GH_NEW_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-      - name: Build and Push Docker Image
+      # Install dependencies and build the application
+      - name: Install dependencies and build
         run: |
-          # Tag images with branch name
-          IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nextjs-cicd
-          TAG=${{ github.ref_name }}
+          npm install
+          npm run build
 
-          docker build -t $IMAGE_NAME:$TAG .
-          docker push $IMAGE_NAME:$TAG
+      - name: Configure Docker tags
+        id: docker-tags
+        run: |
+          if [[ "${{ github.ref }}" == refs/pull/* ]]; then
+            TAG_SUFFIX="pr-${GITHUB_REF#refs/pull/}"
+            TAG_SUFFIX="${TAG_SUFFIX%/merge}-$(git rev-parse --short HEAD)"
+          else
+            TAG_SUFFIX="${GITHUB_REF#refs/heads/}-$(git rev-parse --short HEAD)"
+          fi
+          TAG_SUFFIX=$(echo "$TAG_SUFFIX" | tr '/' '-' | tr '_' '-')
 
+          if [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
+            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.version }}" >> $GITHUB_ENV
+          else
+            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG_SUFFIX" >> $GITHUB_ENV
+          fi
+          echo "TAG_SUFFIX=$TAG_SUFFIX" >> $GITHUB_ENV
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "${{ secrets.GH_NEW_PAT }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Build and Tag Docker Image
+        run: docker build -t ${{ env.FULL_TAG }} .
+
+      - name: Push Docker Images
+        if: github.event_name != 'pull_request'
+        run: |
+          # Always push the primary tag
+          docker push ${{ env.FULL_TAG }}
+
+          # DEV BRANCH STRATEGY
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            DEV_LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest"
+            docker tag ${{ env.FULL_TAG }} $DEV_LATEST
+            docker push $DEV_LATEST
+          fi
+
+          # SANDBOX BRANCH STRATEGY
+          if [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
+            SANDBOX_LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sandbox-latest"
+            docker tag ${{ env.FULL_TAG }} $SANDBOX_LATEST
+            docker push $SANDBOX_LATEST
+          fi
+
+          # MAIN BRANCH STRATEGY
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+            docker tag ${{ env.FULL_TAG }} $LATEST_TAG
+            docker push $LATEST_TAG
+          fi
+
+      - name: Create Git Tag
+        if: needs.version-check.outputs.should_version == 'true' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag v${{ needs.version-check.outputs.version }}
+          git push origin v${{ needs.version-check.outputs.version }}
+
+      - name: Logout from Container Registry
+        if: always() && github.event_name != 'pull_request'
+        run: docker logout ${{ env.REGISTRY }}
+
+  # ==============================================
+  # Deploy Job - Deploys to appropriate environment
+  # ==============================================
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main'
+    if: (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/sandbox') && github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Set environment-specific variables
       - name: Determine Environment
         id: set-env
         run: |
           if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            echo "ENV=test" >> $GITHUB_ENV
-            echo "COMPOSE_FILE=docker-compose-test.yml" >> $GITHUB_ENV
+            echo "ENV=development" >> $GITHUB_ENV
+            echo "PORT=3001" >> $GITHUB_ENV
             echo "DOMAIN=test.hatesglobal.com" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_ENV
           elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "ENV=prod" >> $GITHUB_ENV
-            echo "COMPOSE_FILE=docker-compose-prod.yml" >> $GITHUB_ENV
-            echo "DOMAIN=hatesglobal.com" >> $GITHUB_ENV
+            echo "ENV=production" >> $GITHUB_ENV
+            echo "PORT=3003" >> $GITHUB_ENV
+            echo "DOMAIN=main.hatesglobal.com" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
+            echo "ENV=sandbox" >> $GITHUB_ENV
+            echo "PORT=3002" >> $GITHUB_ENV
+            echo "DOMAIN=sandbox.hatesglobal.com" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sandbox-latest" >> $GITHUB_ENV
           fi
 
       - name: SSH and Deploy
@@ -60,34 +180,29 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            echo "Deploying to ${{ env.ENV }} environment (${{ env.DOMAIN }})"
+            echo "Deploying ${{ env.IMAGE_NAME }} to ${{ env.ENV }} (${{ env.DOMAIN }})"
+            mkdir -p ~/deployments/${{ env.IMAGE_NAME }} && cd ~/deployments/${{ env.IMAGE_NAME }}
 
-            mkdir -p ~/nextjs-cicd && cd ~/nextjs-cicd
+            # Create Docker Compose file
+            cat << 'EOF' > docker-compose.yml
+            version: '3.8'
+            services:
+              app:
+                image: ${IMAGE_NAME}
+                ports:
+                  - "${PORT}:3000"
+                environment:
+                  - NODE_ENV=${ENV}
+                  - DOMAIN=${DOMAIN}
+                restart: unless-stopped
+            EOF
 
-            COMPOSE_URL="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/${{ env.COMPOSE_FILE }}"
-            echo "Downloading compose file from: $COMPOSE_URL"
-            wget -q "$COMPOSE_URL" -O docker-compose.yml || {
-              echo "Failed to download compose file"
-              exit 1
-            }
-
-            if [ ! -s docker-compose.yml ]; then
-              echo "Error: Compose file is empty or missing"
-              exit 1
-            fi
+            echo "PORT=${{ env.PORT }}" > .env
+            echo "NODE_ENV=${{ env.ENV }}" >> .env
+            echo "DOMAIN=${{ env.DOMAIN }}" >> .env
+            echo "IMAGE_NAME=${{ env.IMAGE_NAME }}" >> .env
 
             sudo docker compose down || true
             sudo docker image prune -af
-
-            IMAGE_NAME="ghcr.io/${{ github.repository_owner }}/nextjs-cicd:${{ github.ref_name }}"
-            echo "Pulling image: $IMAGE_NAME"
-            sudo docker pull "$IMAGE_NAME"
-
-            echo "Starting containers..."
-            sudo docker compose up -d
-
-            echo "Verifying deployment..."
-            sleep 10
-            curl -I http://localhost:${{ env.ENV == 'test' && '3001' || '3000' }} || true
-
+            sudo docker compose --env-file .env up -d
             echo "Successfully deployed to ${{ env.DOMAIN }}"

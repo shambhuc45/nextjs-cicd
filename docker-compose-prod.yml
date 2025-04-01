@@ -1,9 +1,8 @@
-version: '3.8'
 services:
   app:
-    image: ghcr.io/shambhuc45/nextjs-cicd:prod
+    image: ghcr.io/shambhuc45/nextjs-cicd:main
     ports:
-      - "3000:3000"  
+      - "3000:3000"
     environment:
       - NODE_ENV=production
     restart: always
