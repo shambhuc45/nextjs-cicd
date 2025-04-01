@@ -52,7 +52,8 @@ jobs:
           major_pattern: "BREAKING CHANGE"
           minor_pattern: "feat"
           patch_pattern: "fix"
-          format: "{major}.{minor}.{patch}"
+          format: "v{major}.{minor}.{patch}" # Added 'v' prefix to ensure valid tag
+          consider_all_commits: true # Ensure version detection from all commits
 
   # ==============================================
   # Build Job - Builds and tags Docker image
@@ -86,12 +87,23 @@ jobs:
           fi
           TAG_SUFFIX=$(echo "$TAG_SUFFIX" | tr '/' '-' | tr '_' '-')
 
+          # Use version if available, otherwise use branch-SHA
           if [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
-            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.version }}" >> $GITHUB_ENV
+            VERSION="${{ needs.version-check.outputs.version }}"
+            # Ensure version starts with 'v'
+            if [[ ! "$VERSION" =~ ^v ]]; then
+              VERSION="v$VERSION"
+            fi
+            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION" >> $GITHUB_ENV
           else
             echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG_SUFFIX" >> $GITHUB_ENV
           fi
           echo "TAG_SUFFIX=$TAG_SUFFIX" >> $GITHUB_ENV
+
+      - name: Debug Version Output
+        run: |
+          echo "Version being used: ${{ env.FULL_TAG }}"
+          echo "Version from version-check: ${{ needs.version-check.outputs.version }}"
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
@@ -133,8 +145,8 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag v${{ needs.version-check.outputs.version }}
-          git push origin v${{ needs.version-check.outputs.version }}
+          git tag ${{ needs.version-check.outputs.version }}
+          git push origin ${{ needs.version-check.outputs.version }}
 
       - name: Logout from Container Registry
         if: always() && github.event_name != 'pull_request'
