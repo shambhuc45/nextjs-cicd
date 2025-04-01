@@ -47,13 +47,41 @@ jobs:
       - name: Generate Semantic Version
         id: version
         if: steps.check.outputs.should_version == 'true'
-        uses: paulhatch/semantic-version@v3
-        with:
-          major_pattern: "BREAKING CHANGE"
-          minor_pattern: "feat"
-          patch_pattern: "fix"
-          format: "v{major}.{minor}.{patch}" # Added 'v' prefix to ensure valid tag
-          consider_all_commits: true # Ensure version detection from all commits
+        run: |
+          # Get the current version from package.json or use default
+          DEFAULT_VERSION="1.0.0"
+          VERSION=$(jq -r '.version' package.json || echo "$DEFAULT_VERSION")
+          
+          # If we're on main branch, increment version based on commit messages
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Count commit types since last tag
+            MAJOR=$(git log --grep="BREAKING CHANGE" --oneline | wc -l)
+            MINOR=$(git log --grep="^feat" --oneline | wc -l)
+            PATCH=$(git log --grep="^fix" --oneline | wc -l)
+            
+            # Split current version
+            IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$VERSION"
+            
+            # Calculate new version
+            NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
+            if [ $MAJOR -gt 0 ]; then
+              NEW_MINOR=0
+              NEW_PATCH=0
+            else
+              NEW_MINOR=$((CURRENT_MINOR + MINOR))
+              if [ $MINOR -gt 0 ]; then
+                NEW_PATCH=0
+              else
+                NEW_PATCH=$((CURRENT_PATCH + PATCH))
+              fi
+            fi
+            
+            VERSION="${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
+          fi
+          
+          # Ensure version starts with v
+          VERSION="v${VERSION#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
   # ==============================================
   # Build Job - Builds and tags Docker image
@@ -87,23 +115,20 @@ jobs:
           fi
           TAG_SUFFIX=$(echo "$TAG_SUFFIX" | tr '/' '-' | tr '_' '-')
 
-          # Use version if available, otherwise use branch-SHA
           if [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
-            VERSION="${{ needs.version-check.outputs.version }}"
-            # Ensure version starts with 'v'
-            if [[ ! "$VERSION" =~ ^v ]]; then
-              VERSION="v$VERSION"
-            fi
-            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$VERSION" >> $GITHUB_ENV
+            echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.version }}" >> $GITHUB_ENV
           else
             echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG_SUFFIX" >> $GITHUB_ENV
           fi
           echo "TAG_SUFFIX=$TAG_SUFFIX" >> $GITHUB_ENV
 
-      - name: Debug Version Output
+      - name: Verify Docker Tag
         run: |
-          echo "Version being used: ${{ env.FULL_TAG }}"
-          echo "Version from version-check: ${{ needs.version-check.outputs.version }}"
+          echo "Using tag: ${{ env.FULL_TAG }}"
+          if [[ "${{ env.FULL_TAG }}" == *"{"* ]] || [[ "${{ env.FULL_TAG }}" == *"}"* ]]; then
+            echo "ERROR: Invalid tag format detected!"
+            exit 1
+          fi
 
       - name: Login to GitHub Container Registry
         if: github.event_name != 'pull_request'
