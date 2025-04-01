@@ -5,5 +5,5 @@ services:
     ports:
       - "${PORT}:3000"
     environment:
-      - NODE_ENV=${NODE_ENV} # Dynamic environment variable (test, sandbox, production)
+      - NODE_ENV=${NODE_ENV}
     restart: always
