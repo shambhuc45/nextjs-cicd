@@ -8,7 +8,7 @@ on:
       - main
       - sandbox
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+" # Semantic version tags
+      - "v[0-9]+.[0-9]+.[0-9]+"
   pull_request:
     branches:
       - dev
@@ -109,21 +109,23 @@ jobs:
 
           # DEV BRANCH STRATEGY
           if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            # 1. Push mutable dev-latest tag
             DEV_LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest"
             docker tag ${{ env.FULL_TAG }} $DEV_LATEST
             docker push $DEV_LATEST
-            
+          fi
+
+          # SANDBOX BRANCH STRATEGY
+          if [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
+            SANDBOX_LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sandbox-latest"
+            docker tag ${{ env.FULL_TAG }} $SANDBOX_LATEST
+            docker push $SANDBOX_LATEST
           fi
 
           # MAIN BRANCH STRATEGY
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # 1. Push mutable latest tag
             LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
             docker tag ${{ env.FULL_TAG }} $LATEST_TAG
             docker push $LATEST_TAG
-            
-            # 2. Push versioned tag (already done via FULL_TAG)
           fi
 
       - name: Create Git Tag
@@ -168,7 +170,7 @@ jobs:
             echo "ENV=sandbox" >> $GITHUB_ENV
             echo "PORT=3002" >> $GITHUB_ENV
             echo "DOMAIN=sandbox.hatesglobal.com" >> $GITHUB_ENV
-            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF#refs/heads/}-$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sandbox-latest" >> $GITHUB_ENV
           fi
 
       - name: SSH and Deploy
