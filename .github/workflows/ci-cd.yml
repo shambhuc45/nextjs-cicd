@@ -1,4 +1,4 @@
-name: Branch-Based Deployment
+name: Branch-Based Deployment with Release Management
 
 # Trigger conditions for the workflow
 on:
@@ -12,6 +12,8 @@ on:
   pull_request:
     branches:
       - dev
+  release:
+    types: [published]
 
 # Global environment variables for the workflow
 env:
@@ -27,11 +29,20 @@ jobs:
     outputs:
       should_version: ${{ steps.check.outputs.should_version }}
       version: ${{ steps.version.outputs.version }}
+      release_notes: ${{ steps.release-notes.outputs.release_notes }}
     steps:
       # Checkout code with full history for version analysis
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Get last tag
+        id: last-tag
+        run: |
+          # Get the most recent tag or default to v0.0.0
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "last_tag=$LAST_TAG" >> $GITHUB_OUTPUT
+          echo "Found last tag: $LAST_TAG"
 
       - name: Check version condition
         id: check
@@ -48,40 +59,47 @@ jobs:
         id: version
         if: steps.check.outputs.should_version == 'true'
         run: |
-          # Get the current version from package.json or use default
-          DEFAULT_VERSION="1.0.0"
-          VERSION=$(jq -r '.version' package.json || echo "$DEFAULT_VERSION")
-          
-          # If we're on main branch, increment version based on commit messages
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            # Count commit types since last tag
-            MAJOR=$(git log --grep="BREAKING CHANGE" --oneline | wc -l)
-            MINOR=$(git log --grep="^feat" --oneline | wc -l)
-            PATCH=$(git log --grep="^fix" --oneline | wc -l)
-            
-            # Split current version
-            IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$VERSION"
-            
-            # Calculate new version
-            NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
-            if [ $MAJOR -gt 0 ]; then
-              NEW_MINOR=0
+          echo "Checking commits since ${{ steps.last-tag.outputs.last_tag }}"
+          COMMITS_SINCE_LAST_TAG=$(git log ${{ steps.last-tag.outputs.last_tag }}..HEAD --pretty=format:"%s")
+          echo "Commits since last tag:"
+          echo "$COMMITS_SINCE_LAST_TAG"
+
+          MAJOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -i "breaking change" | wc -l | awk '{print ($1 > 0) ? 1 : 0}')
+          MINOR=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -i "^feat" | wc -l | awk '{print ($1 > 0) ? 1 : 0}')
+          PATCH=$(echo "$COMMITS_SINCE_LAST_TAG" | grep -i "^fix" | wc -l | awk '{print ($1 > 0) ? 1 : 0}')
+
+          # Extract current version correctly
+          CURRENT_VERSION="${{ steps.last-tag.outputs.last_tag }}"
+          CURRENT_VERSION="${CURRENT_VERSION#v}"  # Corrected version extraction
+          IFS='.' read -r CURRENT_MAJOR CURRENT_MINOR CURRENT_PATCH <<< "$CURRENT_VERSION"
+
+          NEW_MAJOR=$((CURRENT_MAJOR + MAJOR))
+          if [ $MAJOR -gt 0 ]; then
+            NEW_MINOR=0
+            NEW_PATCH=0
+          else
+            NEW_MINOR=$((CURRENT_MINOR + MINOR))
+            if [ $MINOR -gt 0 ]; then
               NEW_PATCH=0
             else
-              NEW_MINOR=$((CURRENT_MINOR + MINOR))
-              if [ $MINOR -gt 0 ]; then
-                NEW_PATCH=0
-              else
-                NEW_PATCH=$((CURRENT_PATCH + PATCH))
-              fi
+              NEW_PATCH=$((CURRENT_PATCH + PATCH))
             fi
-            
-            VERSION="${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
           fi
-          
-          # Ensure version starts with v
-          VERSION="v${VERSION#v}"
+
+          VERSION="v${NEW_MAJOR}.${NEW_MINOR}.${NEW_PATCH}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generated new version: $VERSION"
+          echo "Version components - Major: $MAJOR, Minor: $MINOR, Patch: $PATCH"
+
+      - name: Generate Release Notes
+        id: release-notes
+        if: steps.check.outputs.should_version == 'true'
+        run: |
+          RELEASE_NOTES=$(git log ${{ steps.last-tag.outputs.last_tag }}..HEAD --pretty=format:"- %s [%an]")
+          RELEASE_NOTES="${RELEASE_NOTES//'%'/'%25'}"
+          RELEASE_NOTES="${RELEASE_NOTES//$'\n'/'%0A'}"
+          RELEASE_NOTES="${RELEASE_NOTES//$'\r'/'%0D'}"
+          echo "release_notes=${RELEASE_NOTES}" >> $GITHUB_OUTPUT
 
   # ==============================================
   # Build Job - Builds and tags Docker image
@@ -117,6 +135,7 @@ jobs:
 
           if [[ "${{ needs.version-check.outputs.should_version }}" == "true" ]]; then
             echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version-check.outputs.version }}" >> $GITHUB_ENV
+            echo "VERSION_TAG=${{ needs.version-check.outputs.version }}" >> $GITHUB_ENV
           else
             echo "FULL_TAG=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG_SUFFIX" >> $GITHUB_ENV
           fi
@@ -167,11 +186,31 @@ jobs:
 
       - name: Create Git Tag
         if: needs.version-check.outputs.should_version == 'true' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_NEW_PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # Delete local and remote tag if exists
+          git tag -d ${{ needs.version-check.outputs.version }} || true
+          git push --delete origin ${{ needs.version-check.outputs.version }} || true
+          # Create and push new tag
           git tag ${{ needs.version-check.outputs.version }}
           git push origin ${{ needs.version-check.outputs.version }}
+          echo "Successfully created tag ${{ needs.version-check.outputs.version }}"
+
+      - name: Create GitHub Release
+        if: needs.version-check.outputs.should_version == 'true' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_NEW_PAT }}
+        with:
+          tag_name: ${{ needs.version-check.outputs.version }}
+          name: Release ${{ needs.version-check.outputs.version }}
+          body: ${{ needs.version-check.outputs.release_notes }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
 
       - name: Logout from Container Registry
         if: always() && github.event_name != 'pull_request'
@@ -183,7 +222,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: build
-    if: (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/sandbox') && github.event_name != 'pull_request'
+    if: (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/sandbox' || startsWith(github.ref, 'refs/tags/v')) && github.event_name != 'pull_request'
 
     steps:
       - name: Checkout code
@@ -198,11 +237,16 @@ jobs:
             echo "PORT=3001" >> $GITHUB_ENV
             echo "DOMAIN=test.hatesglobal.com" >> $GITHUB_ENV
             echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:dev-latest" >> $GITHUB_ENV
-          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          elif [[ "${{ github.ref }}" == "refs/heads/main" || "${{ github.ref }}" == refs/tags/v* ]]; then
             echo "ENV=production" >> $GITHUB_ENV
             echo "PORT=3003" >> $GITHUB_ENV
             echo "DOMAIN=main.hatesglobal.com" >> $GITHUB_ENV
-            echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_ENV
+            if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+              TAG=${GITHUB_REF#refs/tags/}
+              echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$TAG" >> $GITHUB_ENV
+            else
+              echo "IMAGE_NAME=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_ENV
+            fi
           elif [[ "${{ github.ref }}" == "refs/heads/sandbox" ]]; then
             echo "ENV=sandbox" >> $GITHUB_ENV
             echo "PORT=3002" >> $GITHUB_ENV
