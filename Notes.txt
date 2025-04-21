@@ -1,0 +1,1 @@
+npm i @ckeditor/ckeditor5-build-classic @ckeditor/ckeditor5-react ckeditor5
